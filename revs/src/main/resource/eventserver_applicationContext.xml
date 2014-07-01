@@ -1,0 +1,97 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:hz="http://www.hazelcast.com/schema/spring"
+	xsi:schemaLocation="
+    http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+    http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-3.0.xsd
+    http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd
+    http://www.hazelcast.com/schema/spring http://www.hazelcast.com/schema/spring/hazelcast-spring-3.2.xsd
+    ">
+
+	<context:component-scan base-package="dfsi_poc.ep1" />
+
+	<context:annotation-config />
+	<context:spring-configured />
+
+	<bean
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="location" value="classpath:${PROPFILE}.properties" />
+	</bean>
+
+	<bean id="JDBMRecMan" class="jdbm.RecordManagerFactory"
+		factory-method="createRecordManager">
+		<constructor-arg>
+			<value>${jdbm}</value>
+		</constructor-arg>
+	</bean>
+
+	<bean id="JDBM2QSFactory" class="com.pubsubstore.revs.persistence.JDBM2QueueStoreFactory" />
+
+	<hz:hazelcast id="hz">
+		<hz:config>
+			<hz:group password="evs" name="evs" />
+			<hz:queue name="*" backup-count="1">
+				<hz:queue-store enabled="false"
+					factory-implementation="JDBM2QSFactory"></hz:queue-store>
+			</hz:queue>
+			<hz:map name="event_subscribers" backup-count="1">
+				<hz:map-store enabled="false" write-delay-seconds="0"
+					implementation="EventSubscribers" />
+			</hz:map>
+			<hz:map name="event_store" backup-count="1">
+				<hz:map-store enabled="false" write-delay-seconds="0"
+					implementation="EventStore" />
+			</hz:map>
+			<hz:map name="event_security" backup-count="1">
+				<hz:map-store enabled="false" write-delay-seconds="0"
+					implementation="EventSecurity" />
+			</hz:map>
+		</hz:config>
+	</hz:hazelcast>
+
+	<bean id="EventSubscribers" class="com.pubsubstore.revs.persistence.JDBM2MapStore"
+		init-method="init">
+		<property name="mapName" value="event_subscribers" />
+	</bean>
+
+	<bean id="EventStore" class="com.pubsubstore.revs.persistence.JDBM2MapStore"
+		init-method="init">
+		<property name="mapName" value="event_store" />
+	</bean>
+
+	<bean id="EventSecurity" class="com.pubsubstore.revs.persistence.JDBM2MapStore"
+		init-method="init">
+		<property name="mapName" value="event_security" />
+	</bean>
+
+	<bean id="EventRestAPI" class="com.pubsubstore.revs.core.EventRestAPIImpl"
+		init-method="init" />
+
+	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl"
+		init-method="initServer" />
+
+	<bean id="myDeadLetterErrorHandler" class="org.apache.camel.builder.DeadLetterChannelBuilder">
+		<property name="deadLetterUri" value="file:/Users/girish/dfsi/web/errors" />
+		<property name="redeliveryPolicy" ref="myRedeliveryPolicyConfig" />
+	</bean>
+
+	<bean id="myRedeliveryPolicyConfig" class="org.apache.camel.processor.RedeliveryPolicy">
+		<property name="maximumRedeliveries" value="-1" />
+		<property name="redeliveryDelay" value="10000" />
+	</bean>
+
+	<camelContext xmlns="http://camel.apache.org/schema/spring"
+		id="camel" errorHandlerRef="myDeadLetterErrorHandler">
+		<propertyPlaceholder id="properties"
+			location="classpath:${env:PROPFILE}.properties" />
+
+		<template id="pt" defaultEndpoint="log:foo" />
+
+		<route id="EventRestAPI">
+			<from uri="jetty:http://{{apiurl}}/core?matchOnUriPrefix=true" />
+			<to uri="EventRestAPI" />
+		</route>
+
+	</camelContext>
+
+</beans>
