@@ -1,0 +1,59 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:hz="http://www.hazelcast.com/schema/spring"
+	xsi:schemaLocation="
+    http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+    http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-3.0.xsd
+    http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd
+    http://www.hazelcast.com/schema/spring http://www.hazelcast.com/schema/spring/hazelcast-spring-3.2.xsd
+    ">
+
+	<context:component-scan base-package="dfsi_poc.ep1" />
+
+	<context:annotation-config />
+	<context:spring-configured />
+
+	<bean
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="location" value="classpath:${PROPFILE}.properties" />
+	</bean>
+
+	<hz:client id="hz">
+		<hz:group password="evs" name="evs"/>
+		<hz:network>
+			<hz:member>localhost:5701</hz:member>
+			<hz:member>localhost:5702</hz:member>
+		</hz:network>
+	</hz:client>
+
+	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initClient">
+		<property name="userId" value="admin" />
+		<property name="password" value="admin" />
+	</bean>
+
+	<bean id="WebProcessorEsper" class="dfsi_poc.ep1.WebProcessorEsper" init-method="init">
+		<property name="esperq" value="${esperq}" />
+	</bean>
+
+	<bean id="myDeadLetterErrorHandler" class="org.apache.camel.builder.DeadLetterChannelBuilder">
+		<property name="deadLetterUri" value="file:/Users/girish/dfsi/web/errors" />
+		<property name="redeliveryPolicy" ref="myRedeliveryPolicyConfig" />
+	</bean>
+
+	<bean id="myRedeliveryPolicyConfig" class="org.apache.camel.processor.RedeliveryPolicy">
+		<property name="maximumRedeliveries" value="3" />
+		<property name="redeliveryDelay" value="5000" />
+	</bean>
+
+	<camelContext xmlns="http://camel.apache.org/schema/spring"
+		id="camel" errorHandlerRef="myDeadLetterErrorHandler">
+		<propertyPlaceholder id="properties"
+			location="classpath:${env:PROPFILE}.properties" />
+
+		<route id="cube">
+			<from uri="jetty:http://{{apiurl}}/core?matchOnUriPrefix=true" />
+			<to uri="WebProcessorEsper" />
+		</route>
+
+	</camelContext>
+</beans>
