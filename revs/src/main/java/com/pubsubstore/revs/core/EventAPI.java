@@ -22,12 +22,6 @@ public interface EventAPI {
 	
 	public HazelcastInstance getHzClient();
 	
-	public void incrCubeValue(String cube, long ts, String metric, String dimkey, float value, long ttl);
-
-	public void incrCubeCount(String cube, long ts, String metric, String dimkey, long count, long ttl);
-	
-	public Collection<Measure> getCube(String filter);
-
 	public void authorize(String role);
 
 	public void addUser(String userId, Security user);
@@ -35,5 +29,9 @@ public interface EventAPI {
 	public void deleteUser(String userId);
 
 	public void authenticate(String userId, String password);
+
+	public Event deserialize(String payload, String format);
+
+	public String serialize(Event event, String format);
 
 }

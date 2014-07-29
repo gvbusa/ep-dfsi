@@ -43,9 +43,7 @@ public class EventRestAPIImpl implements Processor {
 
 		response.addHeader("Access-Control-Allow-Origin", "*");
 
-		if (path.endsWith("/cube"))
-			cube(request, response);
-		else if (path.endsWith("/events"))
+		if (path.endsWith("/events"))
 			events(request, response);
 		else if (path.endsWith("/publish"))
 			publish(exchange, request, response);
@@ -94,16 +92,8 @@ public class EventRestAPIImpl implements Processor {
 		String format = request.getParameter("format");
 		String queue = request.getParameter("queue");
 		String binding = request.getParameter("binding");
-		EventConsumer ec = new EventCallback(callback, format, pt);
+		EventConsumer ec = new EventCallback(callback, format, pt, eventAPI);
 		eventAPI.subscribe(ec, queue, binding, false, 1);
-	}
-
-	private void cube(HttpServletRequest request, HttpServletResponse response)
-			throws IOException {
-		String filter = request.getParameter("filter");
-		ObjectMapper mapper = new ObjectMapper();
-		String json = mapper.writeValueAsString(eventAPI.getCube(filter));
-		response.getWriter().print(json);
 	}
 
 	private void events(HttpServletRequest request, HttpServletResponse response)

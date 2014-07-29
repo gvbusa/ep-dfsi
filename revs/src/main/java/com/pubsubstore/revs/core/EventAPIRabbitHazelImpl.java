@@ -1,16 +1,12 @@
 package com.pubsubstore.revs.core;
 
-import java.io.IOException;
-import java.text.SimpleDateFormat;
 import java.util.Collection;
-import java.util.Date;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 import org.apache.camel.CamelContext;
 import org.apache.camel.Exchange;
@@ -22,11 +18,7 @@ import org.springframework.beans.BeansException;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 
-import com.fasterxml.jackson.core.JsonParseException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.hazelcast.config.InMemoryFormat;
 import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IMap;
 import com.hazelcast.core.MapStore;
@@ -82,7 +74,6 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	private boolean isServer;
 	private IMap<String, Event> estore;
 	private IMap<String, Security> secMap;
-	private IMap<Dimension, Measure> cubeMap;
 	private Security clientSecurity;
 
 	private ProducerTemplate pt;
@@ -99,7 +90,6 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	public void init() {
 		estore = hz.getMap("event_store");
 		secMap = hz.getMap("event_security");
-		cubeMap = hz.getMap("event_cube");
 
 		camel = (SpringCamelContext) ctx.getBean("camel");
 
@@ -115,14 +105,6 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	public void initServer() {
 		isServer = true;
 		init();
-
-		// event_cube
-		hz.getConfig().getMapConfig("event_cube")
-				.setInMemoryFormat(InMemoryFormat.OBJECT);
-		cubeMap.addIndex("cube", false);
-		cubeMap.addIndex("hhmm", true);
-		cubeMap.addIndex("dimkey", false);
-		cubeMap.addIndex("metric", false);
 
 		securityServer();
 		load();
@@ -302,7 +284,7 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 			+ queue + "&autoDelete=" + Boolean.toString(!durable);
 
 		try {
-			camel.addRoutes(new EventConsumerRouteBuilder(camel, from, eventConsumer));
+			camel.addRoutes(new EventConsumerRouteBuilder(camel, from, eventConsumer, this));
 		} catch (Exception e) {
 			throw new RevsException(e);
 		}
@@ -346,12 +328,14 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	private static final class EventConsumerRouteBuilder extends RouteBuilder {
 		private final String from;
 		private final EventConsumer eventConsumer;
+		private final EventAPI eventAPI;
 
 		private EventConsumerRouteBuilder(CamelContext camel, String from,
-				EventConsumer eventConsumer) {
+				EventConsumer eventConsumer, EventAPI eventAPI) {
 			super(camel);
 			this.from = from;
 			this.eventConsumer = eventConsumer;
+			this.eventAPI = eventAPI;
 		}
 
 		@Override
@@ -361,7 +345,7 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 					String payload = exchange.getIn().getBody(String.class);
 					String format = (String) exchange.getIn().getHeader(
 							"rabbitmq.CONTENT_TYPE");
-					Event event = deserialize(payload, format);
+					Event event = eventAPI.deserialize(payload, format);
 					eventConsumer.onEvent(event);
 				}
 
@@ -392,11 +376,14 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 		}
 	}
 
-	public static Event deserialize(String payload, String format)
-			throws JsonParseException, JsonMappingException, IOException {
+	public Event deserialize(String payload, String format) {
 		if (format.equals(JSON)) {
 			ObjectMapper mapper = new ObjectMapper();
-			return mapper.readValue(payload, Event.class);
+			try {
+				return mapper.readValue(payload, Event.class);
+			} catch (Exception e) {
+				throw new RevsException(e);
+			}
 		} else if (format.equals(XML)) {
 			return (Event) xstream.fromXML(payload);
 		}
@@ -404,87 +391,19 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 		return null;
 	}
 
-	public static String serialize(Event event, String format)
-			throws JsonProcessingException {
+	public String serialize(Event event, String format) {
 		if (format.equals(JSON)) {
 			ObjectMapper mapper = new ObjectMapper();
-			return mapper.writeValueAsString(event);
+			try {
+				return mapper.writeValueAsString(event);
+			} catch (Exception e) {
+				throw new RevsException(e);
+			}
 		} else if (format.equals(XML)) {
 			return xstream.toXML(event);
 		}
 
 		return null;
-	}
-
-	public void incrCubeValue(String cube, long ts, String metric,
-			String dimkey, float value, long ttl) {
-		authorize("cache");
-
-		SimpleDateFormat sdf = new SimpleDateFormat("H:m");
-		String hhmm = sdf.format(new Date(ts));
-
-		Dimension dim = new Dimension();
-		dim.setCube(cube);
-		dim.setHhmm(hhmm);
-		dim.setDimkey(dimkey);
-		dim.setMetric(metric);
-
-		Measure measure = new Measure();
-		measure.setCube(cube);
-		measure.setHhmm(hhmm);
-		measure.setDimkey(dimkey);
-		measure.setMetric(metric);
-
-		cubeMap.lock(dim);
-		if (cubeMap.containsKey(dim)) {
-			float sum = cubeMap.get(dim).getValue();
-			sum = sum + value;
-			measure.setValue(sum);
-			cubeMap.put(dim, measure);
-		} else {
-			measure.setValue(value);
-			cubeMap.put(dim, measure, ttl, TimeUnit.SECONDS);
-		}
-		cubeMap.unlock(dim);
-
-	}
-
-	public void incrCubeCount(String cube, long ts, String metric,
-			String dimkey, long count, long ttl) {
-		authorize("cache");
-
-		SimpleDateFormat sdf = new SimpleDateFormat("H:m");
-		String hhmm = sdf.format(new Date(ts));
-
-		Dimension dim = new Dimension();
-		dim.setCube(cube);
-		dim.setHhmm(hhmm);
-		dim.setDimkey(dimkey);
-		dim.setMetric(metric);
-
-		Measure measure = new Measure();
-		measure.setCube(cube);
-		measure.setHhmm(hhmm);
-		measure.setDimkey(dimkey);
-		measure.setMetric(metric);
-
-		cubeMap.lock(dim);
-		if (cubeMap.containsKey(dim)) {
-			long sum = cubeMap.get(dim).getCount();
-			sum = sum + count;
-			measure.setCount(sum);
-			cubeMap.put(dim, measure);
-		} else {
-			measure.setCount(count);
-			cubeMap.put(dim, measure, ttl, TimeUnit.SECONDS);
-		}
-		cubeMap.unlock(dim);
-
-	}
-
-	public Collection<Measure> getCube(String filter) {
-		authorize("query");
-		return cubeMap.values(new SqlPredicate(filter));
 	}
 
 	public Collection<Event> getEvents(String filter) {
