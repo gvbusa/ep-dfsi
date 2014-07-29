@@ -58,7 +58,7 @@ public class RabbitMQProducer extends DefaultProducer {
         this.channel = conn.createChannel();
         log.debug("Created channel: {}", channel);
         
-        //channel.confirmSelect();
+        channel.confirmSelect();
     }
 
     @Override
@@ -98,16 +98,16 @@ public class RabbitMQProducer extends DefaultProducer {
 
         try {
         channel.basicPublish(exchangeName, key, properties.build(), messageBodyBytes);
-        //channel.waitForConfirmsOrDie();
+        channel.waitForConfirmsOrDie();
         }
         catch (Exception ex) {
             this.conn = getEndpoint().connect(executorService);
             log.info("ReCreated connection: {}", conn);
             this.channel = conn.createChannel();
             log.info("ReCreated channel: {}", channel);
-            //channel.confirmSelect();
+            channel.confirmSelect();
             channel.basicPublish(exchangeName, key, properties.build(), messageBodyBytes);
-            //channel.waitForConfirmsOrDie();
+            channel.waitForConfirmsOrDie();
         }
     }
 

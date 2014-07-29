@@ -4,8 +4,8 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Date;
-import java.util.Iterator;
-import java.util.concurrent.locks.Lock;
+import java.util.HashMap;
+import java.util.Map;
 
 import javax.servlet.http.HttpServletResponse;
 
@@ -25,30 +25,39 @@ import com.espertech.esper.client.EventBean;
 import com.espertech.esper.client.UpdateListener;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.core.ILock;
+import com.hazelcast.core.IMap;
 import com.pubsubstore.revs.core.Event;
 import com.pubsubstore.revs.core.EventAPI;
-import com.pubsubstore.revs.core.EventConsumer;
 import com.pubsubstore.revs.core.Measure;
+import com.pubsubstore.revs.core.RawEventConsumer;
 
-public class WebProcessorEsper implements EventConsumer {
+public class WebProcessorEsper implements RawEventConsumer {
 
 	@Autowired
 	protected EventAPI eventAPI;
 
-	private HazelcastInstance hz;
+	private static HazelcastInstance hz;
 	private String esperq;
 
-	private EPRuntime runtime;
-	private EPStatement paymentBreakage;
-	private EPStatement eventAgg, sessionAgg, breakageAgg;
+	private static EPRuntime runtime;
+	private static EPStatement paymentBreakage;
+	private static EPStatement eventAgg, sessionAgg, breakageAgg;
 	
+	private IMap<String, Collection<Measure>> aggMap;
+	private boolean leader = false;
 
 	public void init() {
 		// get hazelcast client for distributed locking
 		hz = eventAPI.getHzClient();
-
+		
+		aggMap = hz.getMap("AggMap");
+		aggMap.put("events", new ArrayList<Measure>());
+		aggMap.put("sessions", new ArrayList<Measure>());
+		aggMap.put("breakages", new ArrayList<Measure>());
+		
 		// subscribe to events of interest
-		eventAPI.subscribe(this, esperq, "web.card.webactivity.raw");
+		eventAPI.subscribe(this, esperq, "web.card.webactivity.raw", true, 1);
 
 		// esper engine
 		Configuration config = new Configuration();
@@ -77,14 +86,19 @@ public class WebProcessorEsper implements EventConsumer {
 		System.out.println(pattern);
 		paymentBreakage = admin.createEPL(pattern);
 		
+		// define aggregations
+		eventAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as ecount from Event(selector!='PaymentBroke').win:time(10 min) group by properties('hhmm'), properties('custId') output snapshot every 5 seconds");
+		sessionAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as scount from Event(selector='LoggedIn').win:time(10 min) group by properties('hhmm'), properties('custId') output snapshot every 5 seconds" );
+		breakageAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as bcount from Event(selector='PaymentBroke').win:time(10 min) group by properties('hhmm'), properties('custId') output snapshot every 5 seconds");
+
 		// setup pattern listener
 		paymentBreakage.addListener(new PaymentBreakageListener());
 		
-		// define aggregations
-		eventAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as ecount from Event.win:time(10 min) group by properties('hhmm'), properties('custId')");
-		sessionAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as scount from Event(selector='LoggedIn').win:time(10 min) group by properties('hhmm'), properties('custId')");
-		breakageAgg = admin.createEPL("select properties('hhmm') as hhmm, properties('custId') as custId, count(*) as bcount from Event(selector='PaymentBroke').win:time(10 min) group by properties('hhmm'), properties('custId')");
-		
+		// setup agg listeners
+		eventAgg.addListener(new EventAggListener());
+		sessionAgg.addListener(new SessionAggListener());
+		breakageAgg.addListener(new BreakageAggListener());
+
 	}
 
 	// main
@@ -92,13 +106,29 @@ public class WebProcessorEsper implements EventConsumer {
 	public static void main(String[] args) throws Exception {
 		new ClassPathXmlApplicationContext(
 				"web_processor_esper_applicationContext.xml");
-	}
+		
+}
 
 	// subscription callback
-	public void onEvent(Event event) {
+	public void onEvent(String rawEvent) {
+		// parse csv
+		String[] fields = rawEvent.split(",");
+		
+		// build event
+		Event e = new Event();
+		e.setClassifier("web.card.webactivity");
+		e.setSelector(fields[5]);
+		e.setTs(System.currentTimeMillis());
+		Map<String,String> properties = new HashMap<String,String>();
+		properties.put("sessionId", fields[3]);
+		properties.put("custId", fields[4]);
+		properties.put("action", fields[5]);
+		e.setProperties(properties);
+
+		
 		// send to esper engine
-		event.getProperties().put("hhmm", getHhmm());
-		runtime.sendEvent(event);
+		e.getProperties().put("hhmm", getHhmm());
+		runtime.sendEvent(e);
 	}
 
 	// format timestamp
@@ -111,9 +141,7 @@ public class WebProcessorEsper implements EventConsumer {
 	// when payment breakage detected, publish event and send to esper engine
 	public class PaymentBreakageListener implements UpdateListener {
 		public void update(EventBean[] newData, EventBean[] oldData) {
-
-			Lock lock = hz.getLock("esperlock");
-
+			
 			for (EventBean eb : newData) {
 				Event e = (Event) eb.get("a");
 				e.getProperties().put("action", "PaymentBroke");
@@ -121,15 +149,9 @@ public class WebProcessorEsper implements EventConsumer {
 				e.setClassifier("web.card.payment.breakage");
 				e.setTs(System.currentTimeMillis());
 
-				// use distributed lock to ensure that only one instance publishes
-				if (lock.tryLock()) {
-					try {
-						eventAPI.publish(e, EventAPI.XML, 600);
-					}
-					finally {
-						lock.unlock();
-					}
-				}
+				// publish if leader
+				if (leader)
+					eventAPI.publish(e, EventAPI.XML, 600);
 
 				// send to esper engine
 				e.getProperties().put("hhmm", getHhmm());
@@ -137,22 +159,51 @@ public class WebProcessorEsper implements EventConsumer {
 
 			}
 		}
+
+	}
+
+	// when eventAgg is output, cache it
+	public class EventAggListener implements UpdateListener {
+		public void update(EventBean[] newData, EventBean[] oldData) {
+			if (!leader)
+				return;
+			aggMap.put("events", getMeasures(newData, "events", "ecount"));
+		}
+	}
+
+	// when sessionAgg is output, cache it
+	public class SessionAggListener implements UpdateListener {
+		public void update(EventBean[] newData, EventBean[] oldData) {
+			if (!leader)
+				return;
+			aggMap.put("sessions", getMeasures(newData, "sessions", "scount"));
+		}
+	}
+
+	// when breakageAgg is output, cache it
+	public class BreakageAggListener implements UpdateListener {
+		public void update(EventBean[] newData, EventBean[] oldData) {
+			if (!leader)
+				return;
+			aggMap.put("breakages", getMeasures(newData, "breakages", "bcount"));
+		}
 	}
 
 	// convert the aggregates into cube for frontend
 	public Collection<Measure> getCube() {
 		Collection<Measure> cube = new ArrayList<Measure>();
-		cube.addAll(getMeasures(eventAgg.iterator(), "events", "ecount"));
-		cube.addAll(getMeasures(sessionAgg.iterator(), "sessions", "scount"));
-		cube.addAll(getMeasures(breakageAgg.iterator(), "breakages", "bcount"));
+		cube.addAll(aggMap.get("events"));
+		cube.addAll(aggMap.get("sessions"));
+		cube.addAll(aggMap.get("breakages"));
 		return cube;
 	}
 
 	// convert each aggregate into cube
-	private Collection<Measure> getMeasures(Iterator<EventBean> i, String metric, String countvar) {		
+	private Collection<Measure> getMeasures(EventBean[] ebarray, String metric, String countvar) {				
 		Collection<Measure> measures = new ArrayList<Measure>();
-		for (Iterator<EventBean> iter = i; iter.hasNext();) {
-			EventBean eb = iter.next();
+		if (ebarray == null)
+			return measures;
+		for (EventBean eb : ebarray) {
 			Measure measure = new Measure();
 			measure.setCube("payment");
 			measure.setHhmm((String) eb.get("hhmm"));
@@ -193,5 +244,13 @@ public class WebProcessorEsper implements EventConsumer {
 	public void setEsperq(String esperq) {
 		this.esperq = esperq;
 	}
+	
+	public void leadership() {
+		ILock lock = hz.getLock("leadership");
+		lock.lock();
+		leader = true;
+		System.out.println("I'm the leader");
+	}
+
 
 }

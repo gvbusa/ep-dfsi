@@ -13,6 +13,7 @@
 	<context:annotation-config />
 	<context:spring-configured />
 
+	<!-- Data Grid -->
 	<hz:client id="hz">
 		<hz:group password="evs" name="evs"/>
 		<hz:network>
@@ -24,6 +25,11 @@
 	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initClient">
 		<property name="userId" value="admin" />
 		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value = "5670" />
+		<property name="rabbitUser" value = "guest" />
+		<property name="rabbitPass" value = "guest" />
 	</bean>
 
 	<bean id="AuthProcessor" class="dfsi_poc.ep1.AuthProcessor" init-method="init" />

@@ -13,18 +13,23 @@
 	<context:annotation-config />
 	<context:spring-configured />
 
+	<!-- Data Grid -->
 	<hz:client id="hz">
-		<hz:group password="evs" name="evs" />
+		<hz:group password="evs" name="evs"/>
 		<hz:network>
 			<hz:member>localhost:5701</hz:member>
 			<hz:member>localhost:5702</hz:member>
 		</hz:network>
 	</hz:client>
 
-	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl"
-		init-method="initClient">
+	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initClient">
 		<property name="userId" value="admin" />
 		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value = "5670" />
+		<property name="rabbitUser" value = "guest" />
+		<property name="rabbitPass" value = "guest" />
 	</bean>
 
 	<bean id="WebProducer" class="dfsi_poc.ep1.WebProducer"
@@ -43,8 +48,8 @@
 	<camelContext xmlns="http://camel.apache.org/schema/spring"
 		id="camel" errorHandlerRef="myDeadLetterErrorHandler">
 
-		<route id="fileToBus" autoStartup="false" streamCache="true" >
-			<from uri="stream:file?fileName=/Users/girish/dfsi/out.dat" />
+		<route id="fileToBus" autoStartup="true" streamCache="true" >
+			<from uri="stream:file?fileName=/Users/girish/dfsi/web.dat" />
 			<to uri="bean:WebProducer?method=onEvent" />
 		</route>
 

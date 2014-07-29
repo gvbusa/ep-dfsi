@@ -13,6 +13,7 @@
 	<context:annotation-config />
 	<context:spring-configured />
 
+	<!-- Data Grid -->
 	<hz:client id="hz">
 		<hz:group password="evs" name="evs"/>
 		<hz:network>
@@ -24,17 +25,20 @@
 	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initClient">
 		<property name="userId" value="admin" />
 		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value = "5670" />
+		<property name="rabbitUser" value = "guest" />
+		<property name="rabbitPass" value = "guest" />
 	</bean>
 
 	<bean id="AuthProducer" class="dfsi_poc.ep1.AuthProducer" init-method="init" />
 
 	<camelContext xmlns="http://camel.apache.org/schema/spring"
 		id="camel">
-
-		<route id="fileToBus" autoStartup="false" streamCache="true">
+		<route id="fileToBus" autoStartup="true" streamCache="true">
 			<from uri="stream:file?fileName=/Users/girish/dfsi/auth.dat" />
 			<to uri="bean:AuthProducer?method=onEvent" />
 		</route>
-
 	</camelContext>
 </beans>

@@ -18,6 +18,7 @@
 		<property name="location" value="classpath:${PROPFILE}.properties" />
 	</bean>
 
+	<!-- Data Grid -->
 	<hz:client id="hz">
 		<hz:group password="evs" name="evs"/>
 		<hz:network>
@@ -29,30 +30,30 @@
 	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initClient">
 		<property name="userId" value="admin" />
 		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value = "5670" />
+		<property name="rabbitUser" value = "guest" />
+		<property name="rabbitPass" value = "guest" />
 	</bean>
 
 	<bean id="WebProcessorEsper" class="dfsi_poc.ep1.WebProcessorEsper" init-method="init">
 		<property name="esperq" value="${esperq}" />
 	</bean>
 
-	<bean id="myDeadLetterErrorHandler" class="org.apache.camel.builder.DeadLetterChannelBuilder">
-		<property name="deadLetterUri" value="file:/Users/girish/dfsi/web/errors" />
-		<property name="redeliveryPolicy" ref="myRedeliveryPolicyConfig" />
-	</bean>
-
-	<bean id="myRedeliveryPolicyConfig" class="org.apache.camel.processor.RedeliveryPolicy">
-		<property name="maximumRedeliveries" value="3" />
-		<property name="redeliveryDelay" value="5000" />
-	</bean>
-
 	<camelContext xmlns="http://camel.apache.org/schema/spring"
-		id="camel" errorHandlerRef="myDeadLetterErrorHandler">
+		id="camel">
 		<propertyPlaceholder id="properties"
 			location="classpath:${env:PROPFILE}.properties" />
 
 		<route id="cube">
 			<from uri="jetty:http://{{apiurl}}/core?matchOnUriPrefix=true" />
 			<to uri="WebProcessorEsper" />
+		</route>
+
+		<route id="heartbeat">
+			<from uri="timer:heartbeat?repeatCount=1" />
+			<to uri="bean:WebProcessorEsper?method=leadership" />
 		</route>
 
 	</camelContext>

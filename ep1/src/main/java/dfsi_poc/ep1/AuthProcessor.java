@@ -1,5 +1,8 @@
 package dfsi_poc.ep1;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.support.ClassPathXmlApplicationContext;
 
@@ -7,10 +10,9 @@ import com.hazelcast.core.HazelcastInstance;
 import com.hazelcast.core.IMap;
 import com.pubsubstore.revs.core.Event;
 import com.pubsubstore.revs.core.EventAPI;
-import com.pubsubstore.revs.core.EventConsumer;
-import com.pubsubstore.revs.core.Measure;
+import com.pubsubstore.revs.core.RawEventConsumer;
 
-public class AuthProcessor implements EventConsumer {
+public class AuthProcessor implements RawEventConsumer {
 
 	@Autowired
 	protected EventAPI eventAPI;
@@ -29,7 +31,7 @@ public class AuthProcessor implements EventConsumer {
 		}
 
 		// subscribe to ha.AuthProcessor queue
-		eventAPI.subscribe(this, "ha.AuthProcessor", "authorizer.card.auth.raw");
+		eventAPI.subscribe(this, "ha.AuthProcessor", "authorizer.card.auth.raw", true, 4);
 
 	}
 
@@ -39,37 +41,33 @@ public class AuthProcessor implements EventConsumer {
 				"auth_processor_applicationContext.xml");
 	}
 
-	public void onEvent(Event event) {
+	public void onEvent(String rawEvent) {
+		// parse csv
+		String[] fields = rawEvent.split(",");
+		
+		// build event
+		Event e = new Event();
+		e.setSelector(fields[5]);
+		e.setTs(System.currentTimeMillis());
+		Map<String,String> properties = new HashMap<String,String>();
+		properties.put("acctNbr", fields[0]);
+		properties.put("creditLimit", fields[1]);
+		properties.put("posZipCode", fields[2]);
+		properties.put("authCcyymmdd", fields[3]);
+		properties.put("authHhmmss", fields[4]);
+		properties.put("amountRollup", fields[5]);
+		e.setProperties(properties);
+
 		// lookup acctNbr
-		String acctKey = acctMap.get(event.getProperties().get("acctNbr"));
+		String acctKey = acctMap.get(e.getProperties().get("acctNbr"));
 
 		// enrich with acctKey
-		event.getProperties().put("acctKey", acctKey);
+		e.getProperties().put("acctKey", acctKey);
 
 		// publish auth event
-		event.setClassifier("authorizer.card.auth");
-		eventAPI.publish(event, EventAPI.JSON, 600);
-
-		// increment cube
-		eventAPI.incrCubeValue("authsum", event.getTs(), "authsum", acctKey, Float.parseFloat((String) event.getProperties().get("amountRollup")), 600);
-
-		// check for auth sum exceeding 1000 in past 10 minutes
-		float authSum = getAuthSum(acctKey);
-		if (authSum > 1000.0) {
-			event.setClassifier("authorizer.card.auth.exceeded");
-			event.getProperties().put("authSum", Float.toString(authSum));
-			eventAPI.publish(event, EventAPI.XML, 600);
-		}
+		e.setClassifier("authorizer.card.auth");
+		eventAPI.publish(e, EventAPI.XML, 600);
 
 	}
-
-	private float getAuthSum(String acctKey) {
-		float authSum = 0.0F;
-		for (Measure measure : eventAPI.getCube("cube='authsum' AND metric='authsum' AND dimkey='" + acctKey + "'")) {
-			authSum += measure.getValue();
-		}
-		return authSum;
-	}
-
 
 }
