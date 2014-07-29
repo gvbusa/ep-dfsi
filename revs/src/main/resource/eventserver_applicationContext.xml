@@ -67,8 +67,15 @@
 	<bean id="EventRestAPI" class="com.pubsubstore.revs.core.EventRestAPIImpl"
 		init-method="init" />
 
-	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl"
-		init-method="initServer" />
+	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl" init-method="initServer">
+		<property name="userId" value="admin" />
+		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value = "5670" />
+		<property name="rabbitUser" value = "guest" />
+		<property name="rabbitPass" value = "guest" />
+	</bean>
 
 	<bean id="myDeadLetterErrorHandler" class="org.apache.camel.builder.DeadLetterChannelBuilder">
 		<property name="deadLetterUri" value="file:/Users/girish/dfsi/web/errors" />

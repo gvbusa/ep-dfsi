@@ -51,6 +51,11 @@
 			<version>${camel.version}</version>
 		</dependency>
 		<dependency>
+			<groupId>org.apache.camel</groupId>
+			<artifactId>camel-sql</artifactId>
+			<version>${camel.version}</version>
+		</dependency>
+		<dependency>
 			<groupId>org.apache-extras.camel-extra</groupId>
 			<artifactId>camel-esper</artifactId>
 			<version>${camel.version}</version>
@@ -161,6 +166,12 @@
 			<groupId>org.apache.commons</groupId>
 			<artifactId>commons-lang3</artifactId>
 			<version>3.0</version>
+		</dependency>
+
+		<dependency>
+			<groupId>commons-dbcp</groupId>
+			<artifactId>commons-dbcp</artifactId>
+			<version>1.4</version>
 		</dependency>
 
 	</dependencies>

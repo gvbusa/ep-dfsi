@@ -95,7 +95,7 @@ public class EventRestAPIImpl implements Processor {
 		String queue = request.getParameter("queue");
 		String binding = request.getParameter("binding");
 		EventConsumer ec = new EventCallback(callback, format, pt);
-		eventAPI.subscribe(ec, queue, binding);
+		eventAPI.subscribe(ec, queue, binding, false, 1);
 	}
 
 	private void cube(HttpServletRequest request, HttpServletResponse response)

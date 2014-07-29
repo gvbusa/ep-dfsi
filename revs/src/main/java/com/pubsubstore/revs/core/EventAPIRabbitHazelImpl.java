@@ -19,7 +19,6 @@ import org.apache.camel.ProducerTemplate;
 import org.apache.camel.builder.RouteBuilder;
 import org.apache.camel.spring.SpringCamelContext;
 import org.springframework.beans.BeansException;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
 
@@ -37,8 +36,42 @@ import com.thoughtworks.xstream.XStream;
 public class EventAPIRabbitHazelImpl implements EventAPI,
 		ApplicationContextAware {
 
-	@Autowired
+	private String userId;
+	private String password;
 	protected HazelcastInstance hz;
+	protected String rabbitHost;
+	protected String rabbitPort;
+	protected String rabbitUser;
+	protected String rabbitPass;
+
+	public void setUserId(String userId) {
+		this.userId = userId;
+	}
+
+	public void setPassword(String password) {
+		this.password = password;
+	}
+
+	public void setHz(HazelcastInstance hz) {
+		this.hz = hz;
+	}
+
+	public void setRabbitHost(String rabbitHost) {
+		this.rabbitHost = rabbitHost;
+	}
+
+	public void setRabbitPort(String rabbitPort) {
+		this.rabbitPort = rabbitPort;
+	}
+
+	public void setRabbitUser(String rabbitUser) {
+		this.rabbitUser = rabbitUser;
+	}
+
+	public void setRabbitPass(String rabbitPass) {
+		this.rabbitPass = rabbitPass;
+	}
+
 
 	public HazelcastInstance getHzClient() {
 		// security check
@@ -56,22 +89,13 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	private ApplicationContext ctx;
 	private SpringCamelContext camel;
 
-	private String userId;
-	private String password;
-
-	public void setUserId(String userId) {
-		this.userId = userId;
-	}
-
-	public void setPassword(String password) {
-		this.password = password;
-	}
 
 	private static final ThreadLocal<Security> secContext = new ThreadLocal<Security>();
 	private static XStream xstream;
 
 	private ExecutorService publisher = Executors.newFixedThreadPool(1);
-
+	private String rabbitUrl;
+	
 	public void init() {
 		estore = hz.getMap("event_store");
 		secMap = hz.getMap("event_security");
@@ -81,6 +105,7 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 
 		// setup rabbitmq
 		pt = camel.createProducerTemplate();
+		rabbitUrl = "rabbitmq://" + rabbitHost + ":" + rabbitPort + "/ha.EventBus?exchangeType=topic&username=" + rabbitUser + "&password=" + rabbitPass;
 
 		// setup xstream
 		xstream = new XStream();
@@ -165,6 +190,50 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 		securityClient();
 	}
 
+	public void publish(String rawEvent, String classifier, String format, long ttl) {
+		authorize("publish");
+		publisher.execute(new RawPublishTask(rawEvent, classifier, format, ttl));
+	}
+
+	private class RawPublishTask implements Runnable {
+		String rawEvent;
+		String classifier;
+		String format;
+		long ttl;
+		
+		public RawPublishTask(String rawEvent, String classifier, String format, long ttl) {
+			this.rawEvent = rawEvent;
+			this.classifier = classifier;
+			this.format = format;
+			this.ttl = ttl;
+		}
+
+		public void run() {
+			// publish event
+			try {
+
+				Map<String, Object> hdrs = new HashMap<String, Object>();
+				hdrs.put("rabbitmq.ROUTING_KEY", classifier);
+				hdrs.put("rabbitmq.DELIVERY_MODE", 1);
+				hdrs.put("rabbitmq.CONTENT_TYPE", format);
+				hdrs.put("rabbitmq.EXPIRATION", ttl * 1000);
+
+				// send to rabbitmq
+				pt.sendBodyAndHeaders(
+						rabbitUrl + "&autoDelete=false",
+						rawEvent, hdrs);
+
+				// send to event store
+				//estore.put(key, event, ttl, TimeUnit.SECONDS);
+
+			} catch (Exception ex) {
+				throw new RevsException("Unable to publish event", ex);
+			}
+			
+		}
+		
+	}
+
 	public void publish(Event event, String format, long ttl) {
 		authorize("publish");
 		publisher.execute(new PublishTask(event, format, ttl));
@@ -198,7 +267,7 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 
 				// send to rabbitmq
 				pt.sendBodyAndHeaders(
-						"rabbitmq://localhost:5670/ha.EventBus?autoDelete=false&exchangeType=topic&username=guest&password=guest",
+						rabbitUrl + "&autoDelete=false",
 						payload, hdrs);
 
 				// send to event store
@@ -222,18 +291,37 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 	}
 
 	public void subscribe(EventConsumer eventConsumer, String queue,
-			String binding) {
+			String binding, boolean durable, int numThreads) {
 		// security check
 		authorize("subscribe");
 		
 		String from = "";
-		from = "rabbitmq://localhost:5670/ha.EventBus?routingKey="
+		from = rabbitUrl + "&routingKey="
 			+ binding
-			+ "&username=guest&password=guest&exchangeType=topic&autoDelete=false&threadPoolSize=1&autoAck=false&queue="
-			+ queue;
+			+ "&threadPoolSize=" + numThreads + "&autoAck=false&queue="
+			+ queue + "&autoDelete=" + Boolean.toString(!durable);
 
 		try {
-			camel.addRoutes(new MyDynamcRouteBuilder(camel, from, eventConsumer));
+			camel.addRoutes(new EventConsumerRouteBuilder(camel, from, eventConsumer));
+		} catch (Exception e) {
+			throw new RevsException(e);
+		}
+
+	}
+
+	public void subscribe(RawEventConsumer rawEventConsumer, String queue,
+			String binding, boolean durable, int numThreads) {
+		// security check
+		authorize("subscribe");
+		
+		String from = "";
+		from = rabbitUrl + "&routingKey="
+			+ binding
+			+ "&threadPoolSize=" + numThreads + "&autoAck=false&queue="
+			+ queue + "&autoDelete=" + Boolean.toString(!durable);
+
+		try {
+			camel.addRoutes(new RawEventConsumerRouteBuilder(camel, from, rawEventConsumer));
 		} catch (Exception e) {
 			throw new RevsException(e);
 		}
@@ -255,11 +343,11 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 		this.ctx = ctx;
 	}
 
-	private static final class MyDynamcRouteBuilder extends RouteBuilder {
+	private static final class EventConsumerRouteBuilder extends RouteBuilder {
 		private final String from;
 		private final EventConsumer eventConsumer;
 
-		private MyDynamcRouteBuilder(CamelContext camel, String from,
+		private EventConsumerRouteBuilder(CamelContext camel, String from,
 				EventConsumer eventConsumer) {
 			super(camel);
 			this.from = from;
@@ -275,6 +363,29 @@ public class EventAPIRabbitHazelImpl implements EventAPI,
 							"rabbitmq.CONTENT_TYPE");
 					Event event = deserialize(payload, format);
 					eventConsumer.onEvent(event);
+				}
+
+			});
+		}
+	}
+
+	private static final class RawEventConsumerRouteBuilder extends RouteBuilder {
+		private final String from;
+		private final RawEventConsumer rawEventConsumer;
+
+		private RawEventConsumerRouteBuilder(CamelContext camel, String from,
+				RawEventConsumer rawEventConsumer) {
+			super(camel);
+			this.from = from;
+			this.rawEventConsumer = rawEventConsumer;
+		}
+
+		@Override
+		public void configure() throws Exception {
+			from(from).process(new Processor() {
+				public void process(Exchange exchange) throws Exception {
+					String payload = exchange.getIn().getBody(String.class);
+					rawEventConsumer.onEvent(payload);
 				}
 
 			});

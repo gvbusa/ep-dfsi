@@ -8,11 +8,16 @@ public interface EventAPI {
 	
 	public static final String JSON = "application/json";
 	public static final String XML = "application/xml";
+	public static final String RAW = "application/text";
 	
+	public void publish(String rawEvent, String classifier, String format, long ttl);
+
 	public void publish(Event event, String format, long ttl);
 	
-	public void subscribe(EventConsumer eventConsumer, String queue, String binding);
-	
+	public void subscribe(EventConsumer eventConsumer, String queue, String binding, boolean durable, int numThreads);
+
+	public void subscribe(RawEventConsumer rawEventConsumer, String queue, String binding, boolean durable, int numThreads);
+
 	public Collection<Event> getEvents(String filter);
 	
 	public HazelcastInstance getHzClient();
