@@ -1,0 +1,60 @@
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:hz="http://www.hazelcast.com/schema/spring"
+	xsi:schemaLocation="
+    http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+    http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-3.0.xsd
+    http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd
+    http://www.hazelcast.com/schema/spring http://www.hazelcast.com/schema/spring/hazelcast-spring-3.2.xsd
+    ">
+
+	<context:component-scan base-package="dfsi_poc.ep1" />
+
+	<context:annotation-config />
+	<context:spring-configured />
+
+	<!-- Data Grid -->
+	<hz:client id="hz">
+		<hz:group password="evs" name="evs" />
+		<hz:network>
+			<hz:member>localhost:5701</hz:member>
+			<hz:member>localhost:5702</hz:member>
+		</hz:network>
+	</hz:client>
+
+	<bean id="EventAPI" class="com.pubsubstore.revs.core.EventAPIRabbitHazelImpl"
+		init-method="initClient">
+		<property name="userId" value="admin" />
+		<property name="password" value="admin" />
+		<property name="hz" ref="hz" />
+		<property name="rabbitHost" value="localhost" />
+		<property name="rabbitPort" value="5670" />
+		<property name="rabbitUser" value="guest" />
+		<property name="rabbitPass" value="guest" />
+	</bean>
+
+	<bean id="ODSSubscriber" class="dfsi_poc.ep1.ODSSubscriber"
+		init-method="init" />
+
+	<!-- this is the JDBC data source which uses an in-memory only Apache Derby 
+		database -->
+	<bean id="dataSource" class="org.apache.commons.dbcp.BasicDataSource"
+		destroy-method="close">
+		<property name="driverClassName" value="org.hsqldb.jdbcDriver" />
+		<property name="url" value="jdbc:hsqldb:hsql://localhost;default_schema=true" />
+		<property name="username" value="sa" />
+		<property name="password" value="" />
+	</bean>
+
+	<!-- configure the Camel SQL component to use the JDBC data source -->
+	<bean id="sql" class="org.apache.camel.component.sql.SqlComponent">
+		<property name="dataSource" ref="dataSource" />
+	</bean>
+	
+	<camelContext xmlns="http://camel.apache.org/schema/spring"
+		id="camel">
+
+		<template id="pt" defaultEndpoint="log:foo" />
+
+	</camelContext>
+</beans>
